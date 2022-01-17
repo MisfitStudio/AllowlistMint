@@ -1,0 +1,254 @@
+import { ethers, BigNumber } from 'ethers';
+import React, { useState, useContext, useEffect } from 'react';
+import './App.css';
+import { MisfitContext, SignerContext } from "./hardhat/SymfoniContext";
+
+interface Domain {
+  name: string,
+  version: string,
+  verifyingContract: string,
+  chainId: number,
+}
+
+
+interface NFTVoucher {
+  client: string,
+  time: number,
+  price: BigNumber,
+  max_mint: number,
+}
+
+const voucherTypes = {
+  NFTVoucher: [
+    { name: "client", type: "address" },
+    { name: "time", type: "uint256" },
+    { name: "price", type: "uint256" },
+    { name: "max_mint", type: "uint256" },
+  ]
+}
+
+function App() {
+  const misfit = useContext(MisfitContext);
+  const [signer,] = useContext(SignerContext);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [joinedRaffle, setJoinedRaffle] = useState<boolean>();
+  const [currSaleId, setCurrSaleId] = useState<BigNumber>(BigNumber.from(1));
+  const [domain, setDomain] = useState<Domain>({
+    name: "Misfit-Voucher",
+    version: "1",
+    verifyingContract: "",
+    chainId: 1337,
+  })
+  const [voucher, setVoucher] = useState<NFTVoucher>({
+    client:"",
+    time: 0,
+    price: BigNumber.from(0),
+    max_mint: 0
+  });
+  const [signature, setSignature] = useState<string>();
+  const [numberWantToBuy, setNumberWantToBuy] = useState<number>()
+  
+  const [balance, setBalance] = useState<BigNumber>(BigNumber.from(0));
+  const [tokenList, setTokenList] = useState<BigNumber[]>([]);
+
+  useEffect(() => {
+    const updateParameters = async () => {
+      if (misfit.instance && signer && signer.provider) {
+        console.log("update param misfit.instance",misfit.instance)
+        const singerAddr = await signer.getAddress();
+        setIsAdmin(singerAddr === await misfit.instance.owner());
+        setDomain({ ...domain, verifyingContract: misfit.instance.address, chainId: await signer.getChainId()});
+        setVoucher({ ...voucher, client: singerAddr });
+        setBalance(await signer.provider.getBalance(misfit.instance.address));
+        setTokenList(await misfit.instance.tokensOfOwner(singerAddr));
+      }
+    }
+    updateParameters().then(() => {
+      getMyVoucher()
+      getMyRaffle()
+    });
+
+    const getMyVoucher = async () => {
+      if (misfit.instance && signer && signer.provider) {
+        const singerAddr = await signer.getAddress();
+        const fetchRes = await fetch("http://localhost:3080/getMyVoucher", {
+          method: "POST",
+          headers: {
+            public_key: singerAddr,
+            signed: "blah"
+          }
+        }).then((res) => res.json())
+        console.log("fetchRes",fetchRes)
+        if (fetchRes.secret) {
+          setSignature(fetchRes.secret);
+        }
+        if (fetchRes.voucher) {
+          console.log("got voucher",await updateParameters())
+
+            setVoucher({ ...fetchRes.voucher});
+          
+        }
+        
+      }
+    }
+    
+    const getMyRaffle = async () => {
+      if (misfit.instance && signer && signer.provider) {
+        const singerAddr = await signer.getAddress();
+        const fetchRes = await  fetch("http://localhost:3080/getMyRaffle", {
+          method: "GET",
+          headers: {
+            address: singerAddr
+          }
+        }).then((res) => res.json())
+        console.log("getMyRaffle fetchRes",fetchRes)
+        setJoinedRaffle(fetchRes)
+      }
+      
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [misfit, signer]);
+
+  const inputClient = (e: React.FormEvent<HTMLInputElement>) => {
+    // console.log(e.currentTarget.value);
+    setVoucher({ ...voucher, client: e.currentTarget.value});
+  }
+
+  // const sign = async () => {
+  //   if (signer) {
+  //     try {
+  //       //@ts-ignore
+  //       const signature = await signer._signTypedData(domain, voucherTypes, voucher);
+  //       console.log(signature);
+  //       setSignature(signature);
+  //     }
+  //     catch(err: any) {
+  //       err.data ? alert(err.data.message) : alert(err.message);
+  //     }
+  //   }
+  // }
+  const inputNumberWantToBuy = (e: React.FormEvent<HTMLInputElement>) => {
+    // console.log(e.currentTarget.value);
+    setNumberWantToBuy(Number(e.currentTarget.value));
+  }
+
+
+  const redeem = async () => {
+    if (misfit.instance && signature && numberWantToBuy) {
+      try {
+        const tx = await misfit.instance.redeem(voucher, signature,numberWantToBuy, { value: voucher.price.mul(BigNumber.from(numberWantToBuy)) });
+        const receipt = await tx.wait();
+        if (receipt.status && signer) {
+          setTokenList(await misfit.instance.tokensOfOwner(await signer.getAddress()));
+        }
+      }
+      catch (err: any) {
+        err.data ? alert(err.data.message) : alert(err.message);
+      }
+    }
+  }
+
+  
+  const joinraffle = async () => {
+    if (misfit.instance && signer && signer.provider && numberWantToBuy) {
+      const singerAddr = await signer.getAddress();
+      const fetchRes = await fetch("http://localhost:3080/joinRaffle", {
+        method:"POST",
+        headers: {
+          address: singerAddr,
+          mintnumber: String(numberWantToBuy)
+        }
+      }).then((res) => res.text())
+      if (fetchRes == "OK") {
+        setJoinedRaffle(true)
+      } else {
+        setJoinedRaffle(false)
+      }
+    }
+  }
+  
+  const withdraw = async () => {
+    if (misfit.instance) {
+      try {
+        const tx = await misfit.instance.withdraw(balance);
+        const receipt = await tx.wait();
+        if (receipt.status && signer && signer.provider) {
+          setBalance(await signer.provider.getBalance(misfit.instance.address))
+        }
+      }
+      catch(err: any) {
+        err.data ? alert(err.data.message) : alert(err.message);
+      }
+    }
+  }
+
+  const updateSaleId = async () => {
+    if (misfit.instance) {
+      try {
+        const tx = await misfit.instance.setSaleId(currSaleId.add(1));
+        const receipt = await tx.wait();
+        if (receipt.status && signer && signer.provider) {
+          setCurrSaleId(await misfit.instance.currentSaleId());
+        }
+      }
+      catch(err: any) {
+        err.data ? alert(err.data.message) : alert(err.message);
+      }
+    }    
+  }
+
+  return (
+    <div className="App">
+      {isAdmin?
+        <div>
+          <h1>Admin Page</h1>
+          
+          <h3>client address</h3>
+          <input onChange={inputClient}></input>
+          <br/>
+          <button>generate - disabled</button>
+          <h3>redeem code</h3>
+          <p>{signature}</p>
+          
+          <h3>current sale ID</h3>
+          <p>{currSaleId.toString()}</p>
+          <button onClick={updateSaleId}>update sale ID</button>
+          
+          <h3>contract balance</h3>
+          <p>{balance.toString()}</p>
+          <button onClick={withdraw}>withdraw</button>
+        </div>
+      :
+        <div>
+          <h1>Client Page</h1><br/>
+          <h2> Current sales ID: {currSaleId.toString()} </h2><br />
+          <h3>How many do you want to buy?</h3>
+          <input onChange={inputNumberWantToBuy}></input>
+          <br/>
+          <h3>Your voucher: </h3><br/>
+          {
+            (currSaleId.toNumber() < 3) && signature && numberWantToBuy ? 
+            <button onClick={redeem}>redeem</button>
+            :
+            <div> You currently do not have a voucher, visit our discord channel to get one!</div>
+          }
+          {
+            (currSaleId.toNumber() >= 3) && signature && numberWantToBuy ? 
+            <button onClick={redeem}>you have won, redeem</button>
+            :
+            joinedRaffle ? 
+            <div> join have joined the raffle, lets wait for results to come out</div>
+            :
+            (currSaleId.toNumber() >= 3) ? 
+            <div> Want to join the raffle?<button onClick={joinraffle}>join raffle</button> </div>
+            : null
+          }
+          <h3>token list</h3>
+          <p>{tokenList.map((tid)=>tid.toString()+", ")}</p>
+        </div>
+      }
+    </div>
+  );
+}
+
+export default App;
